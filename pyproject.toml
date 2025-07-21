@@ -16,6 +16,7 @@ dependencies = [
     "mcp>=1.9.1",
     "supabase>=2.15.1",
     "aiohttp>=3.8.0",
+    "universal-mcp>=0.1.0",
 ]
 
 [tool.setuptools]

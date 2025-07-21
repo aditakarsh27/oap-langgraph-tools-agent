@@ -13,6 +13,8 @@ from tools_agent.utils.tools import (
     wrap_mcp_authenticate_tool,
     create_langchain_mcp_tool,
 )
+from tools_agent.agents.auto import AutoAgent
+from tools_agent.agents.utils import AgentRPlatformManager
 
 
 UNEDITABLE_SYSTEM_PROMPT = "\nIf the tool throws an error requiring authentication, provide the user with a Markdown link to the authentication page and prompt them to authenticate."
@@ -157,90 +159,22 @@ def get_api_key_for_model(model_name: str, config: RunnableConfig):
 
 async def graph(config: RunnableConfig):
     cfg = GraphConfigPydantic(**config.get("configurable", {}))
-    tools = []
-
-    supabase_token = config.get("configurable", {}).get("x-supabase-access-token")
-    if cfg.rag and cfg.rag.rag_url and cfg.rag.collections and supabase_token:
-        for collection in cfg.rag.collections:
-            rag_tool = await create_rag_tool(
-                cfg.rag.rag_url, collection, supabase_token
-            )
-            tools.append(rag_tool)
-
-    if cfg.mcp_config and cfg.mcp_config.auth_required:
-        mcp_tokens = await fetch_tokens(config)
-    else:
-        mcp_tokens = None
-    if (
-        cfg.mcp_config
-        and cfg.mcp_config.url
-        and cfg.mcp_config.tools
-        and (mcp_tokens or not cfg.mcp_config.auth_required)
-    ):
-        server_url = cfg.mcp_config.url.rstrip("/") + "/mcp"
-
-        tool_names_to_find = set(cfg.mcp_config.tools)
-        fetched_mcp_tools_list: list[StructuredTool] = []
-        names_of_tools_added = set()
-
-        # If the tokens are not None, then we need to add the authorization header. otherwise make headers None
-        headers = (
-            mcp_tokens is not None
-            and {"Authorization": f"Bearer {mcp_tokens['access_token']}"}
-            or None
-        )
-        try:
-            async with streamablehttp_client(server_url, headers=headers) as streams:
-                read_stream, write_stream, _ = streams
-                async with ClientSession(read_stream, write_stream) as session:
-                    await session.initialize()
-
-                    page_cursor = None
-
-                    while True:
-                        tool_list_page = await session.list_tools(cursor=page_cursor)
-
-                        if not tool_list_page or not tool_list_page.tools:
-                            break
-
-                        for mcp_tool in tool_list_page.tools:
-                            if not tool_names_to_find or (
-                                mcp_tool.name in tool_names_to_find
-                                and mcp_tool.name not in names_of_tools_added
-                            ):
-                                langchain_tool = create_langchain_mcp_tool(
-                                    mcp_tool, mcp_server_url=server_url, headers=headers
-                                )
-                                fetched_mcp_tools_list.append(
-                                    wrap_mcp_authenticate_tool(langchain_tool)
-                                )
-                                if tool_names_to_find:
-                                    names_of_tools_added.add(mcp_tool.name)
-
-                        page_cursor = tool_list_page.nextCursor
-
-                        if not page_cursor:
-                            break
-                        if tool_names_to_find and len(names_of_tools_added) == len(
-                            tool_names_to_find
-                        ):
-                            break
-
-                    tools.extend(fetched_mcp_tools_list)
-        except Exception as e:
-            print(f"Failed to fetch MCP tools: {e}")
-            pass
-
-    model = init_chat_model(
-        cfg.model_name,
-        temperature=cfg.temperature,
-        max_tokens=cfg.max_tokens,
-        api_key=get_api_key_for_model(cfg.model_name, config) or "No token found"
+    
+    # Get API key for the model
+    api_key = os.getenv("AUTO_AGENT_API_KEY", "test_api_key")
+    if api_key == "test_api_key":
+        api_key = input("Enter your API key: ")
+    
+    # Create platform manager for AutoAgent
+    platform_manager = AgentRPlatformManager(api_key=api_key)
+    
+    # Create AutoAgent with the configured model and system prompt
+    auto_agent = AutoAgent(
+        name="Auto Agent",
+        instructions=cfg.system_prompt + UNEDITABLE_SYSTEM_PROMPT,
+        model=cfg.model_name,
+        platform_manager=platform_manager
     )
-
-    return create_react_agent(
-        prompt=cfg.system_prompt + UNEDITABLE_SYSTEM_PROMPT,
-        model=model,
-        tools=tools,
-        config_schema=GraphConfigPydantic,
-    )
+    
+    # Return the AutoAgent's graph
+    return auto_agent.graph

@@ -4,8 +4,5 @@
     "agent": "./tools_agent/agent.py:graph"
   },
   "env": ".env",
-  "python_version": "3.11",
-  "auth": {
-    "path": "./tools_agent/security/auth.py:auth"
-  }
+  "python_version": "3.11"
 }
